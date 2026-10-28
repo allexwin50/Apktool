@@ -1,125 +1,43 @@
-name: CI
+name: Build Apktool Android 17
+
 on:
   push:
-    branches:
-      - main
-  pull_request:
-    paths:
-      - '**.java'
-      - '**.kts'
-      - 'brut.apktool/apktool-lib/src/main/resources/**'
-      - 'brut.apktool/apktool-lib/src/test/**'
-      - '.github/workflows/**'
-      - 'gradle/libs.versions.toml'
-      - 'gradle/wrapper/**'
-      - 'gradlew'
-      - 'gradlew.bat'
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
-env:
-  BINARY_PATH: brut.apktool/apktool-lib/src/main/resources/prebuilt
+    branches: [ "main" ]
+  workflow_dispatch:
 
 jobs:
-  analyze-mac-aapt:
-    runs-on: macos-latest
-    strategy:
-      matrix:
-        file: [ aapt2 ]
-    steps:
-      - uses: actions/checkout@v7
-      - name: Verify Executable
-        run: ${{ env.BINARY_PATH }}/macosx/${{ matrix.file }} version
-      - name: Output Static
-        run: otool -L ${{ env.BINARY_PATH }}/macosx/${{ matrix.file }} || true
-
-  analyze-linux-aapt:
+  build:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        file: [ aapt2 ]
     steps:
-      - uses: actions/checkout@v7
-      - name: Verify Executable
-        run: ${{ env.BINARY_PATH }}/linux/${{ matrix.file }} version
-      - name: Output Static
-        run: ldd ${{ env.BINARY_PATH }}/linux/${{ matrix.file }} || true
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-  analyze-windows-aapt:
-    runs-on: windows-latest
-    strategy:
-      matrix:
-        file: [ aapt2.exe ]
-    steps:
-      - uses: actions/checkout@v7
-      - name: Verify Executable
-        run: ${{ env.BINARY_PATH }}/windows/${{ matrix.file }} version
-      - name: Output Static
-        run: ldd ${{ env.BINARY_PATH }}/windows/${{ matrix.file }} || true
-
-  build-and-test-with-Java-8-and-later:
-    runs-on: ${{ matrix.os }}
-    needs:
-      - analyze-mac-aapt
-      - analyze-linux-aapt
-      - analyze-windows-aapt
-    name: Build (JDK 17) / Test (JDK ${{ matrix.test-java }}, ${{ matrix.os }})
-    strategy:
-      fail-fast: true
-      matrix:
-        os: [ ubuntu-latest, macOS-latest, windows-latest ]
-        test-java: [ 8, 11, 17, 21, 25 ]
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-java@v6
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
         with:
-          distribution: 'zulu'
-          java-version: 17
+          distribution: 'temurin'
+          java-version: '21'
 
-      - uses: gradle/actions/setup-gradle@v6.4.0
+      - name: Build shadowJar without tests
+        run: ./gradlew :brut.apktool:apktool-cli:shadowJar -x test --no-daemon
+
+      - name: Convert to DEX and package JAR
+        run: |
+          RAW_JAR=$(find brut.apktool/apktool-cli/build/libs/ -name "*-all.jar" | head -n 1)
+          cp "$RAW_JAR" apktool_android.jar
+          
+          D8_BIN=$(find $ANDROID_HOME/build-tools/ -name "d8" | sort -V | tail -n 1)
+          ANDROID_JAR=$(find $ANDROID_HOME/platforms/ -name "android.jar" | sort -V | tail -n 1)
+          
+          mkdir dex_out
+          "$D8_BIN" --release --min-api 35 --lib "$ANDROID_JAR" --output dex_out apktool_android.jar
+          
+          zip -d apktool_android.jar "*.class" "META-INF/*.SF" "META-INF/*.DSA" "META-INF/*.RSA" "prebuilt/windows/*" "prebuilt/macosx/*" 2>/dev/null || true
+          cd dex_out
+          zip -u ../apktool_android.jar classes*.dex
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          cache-provider: basic
-
-      - name: Build (Linux/Mac)
-        if: runner.os != 'Windows'
-        run: ./gradlew build shadowJar proguard -PtestJdkVersion=${{ matrix.test-java }}
-
-      - name: Build (Windows)
-        if: runner.os == 'Windows'
-        run: ./gradlew.bat build shadowJar proguard -PtestJdkVersion=${{ matrix.test-java }}
-
-  upload-artifact:
-    runs-on: ubuntu-latest
-    name: Build apktool.jar
-    if: github.repository == 'iBotPeaches/Apktool' && github.ref == 'refs/heads/main'
-    needs:
-      - build-and-test-with-Java-8-and-later
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
-      - uses: actions/setup-java@v6
-        with:
-          distribution: 'zulu'
-          java-version: 17
-
-      - uses: gradle/actions/setup-gradle@v6.4.0
-        with:
-          cache-provider: basic
-          dependency-graph: generate-and-submit
-
-      - name: Build (Linux/Mac)
-        if: runner.os != 'Windows'
-        run: ./gradlew build shadowJar proguard
-
-      - name: Build (Windows)
-        if: runner.os == 'Windows'
-        run: ./gradlew.bat build shadowJar proguard
-
-      - name: Upload
-        uses: actions/upload-artifact@v7
-        with:
-          name: apktool.jar
-          path: brut.apktool/apktool-cli/build/libs/apktool_v*
+          name: apktool-android-17
+          path: apktool_android.jar
