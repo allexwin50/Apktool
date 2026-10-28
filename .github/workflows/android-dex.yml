@@ -7,35 +7,39 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout main branch
+      - name: Clonar código do Apktool
         uses: actions/checkout@v4
 
-      - name: Set up JDK 21
+      - name: Configurar JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: Build shadowJar
+      - name: Compilar shadowJar pulando os testes (-x test)
         run: ./gradlew :brut.apktool:apktool-cli:shadowJar -x test --no-daemon
 
-      - name: Convert to DEX and package JAR
+      - name: Converter para DEX e empacotar o JAR para Android
         run: |
+          # Localiza o JAR gerado pelo Gradle
           RAW_JAR=$(find brut.apktool/apktool-cli/build/libs/ -name "*-all.jar" | head -n 1)
           cp "$RAW_JAR" apktool_android.jar
           
+          # Encontra o d8 e o android.jar mais recentes disponíveis no runner do GitHub
           D8_BIN=$(find $ANDROID_HOME/build-tools/ -name "d8" | sort -V | tail -n 1)
           ANDROID_JAR=$(find $ANDROID_HOME/platforms/ -name "android.jar" | sort -V | tail -n 1)
           
+          # Converte os .class para classes.dex com min-api 35
           mkdir dex_out
           "$D8_BIN" --release --min-api 35 --lib "$ANDROID_JAR" --output dex_out apktool_android.jar
           
-          zip -d apktool_android.jar "*.class" "META-INF/*.SF" "META-INF/*.DSA" "META-INF/*.RSA" "prebuilt/windows/*" "prebuilt/macosx/*"
+          # Limpa os .class antigos e binários de PC, e injeta os novos DEX
+          zip -d apktool_android.jar "*.class" "META-INF/*.SF" "META-INF/*.DSA" "META-INF/*.RSA" "prebuilt/windows/*" "prebuilt/macosx/*" 2>/dev/null || true
           cd dex_out
           zip -u ../apktool_android.jar classes*.dex
 
-      - name: Upload Artifact
+      - name: Disponibilizar o arquivo pronto para download
         uses: actions/upload-artifact@v4
         with:
-          name: apktool-android-17
+          name: apktool-android-custom
           path: apktool_android.jar
