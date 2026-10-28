@@ -23,7 +23,7 @@ jobs:
 
       - name: Convert to DEX and package JAR
         run: |
-          RAW_JAR=$(find brut.apktool/apktool-cli/build/libs/ -name "*-all.jar" | head -n 1)
+          RAW_JAR=$(find brut.apktool/apktool-cli/build/libs/ -name "*.jar" ! -name "*-sources.jar" ! -name "*-javadoc.jar" | head -n 1)
           cp "$RAW_JAR" apktool_android.jar
           
           D8_BIN=$(find $ANDROID_HOME/build-tools/ -name "d8" | sort -V | tail -n 1)
